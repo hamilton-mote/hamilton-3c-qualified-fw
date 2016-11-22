@@ -152,6 +152,8 @@ void sample_temp(temp_measurement_t *m) {
         critical_error();
         return;
     }*/
+    
+
     if (hdc1000_startmeasure(&hdc1080)) {
         printf("failed to start hdc1080 measurement\n");
         critical_error();
@@ -164,9 +166,9 @@ void sample_temp(temp_measurement_t *m) {
         return;
     }
 	
-    /* Turn on light sensor and let it stabilize */
+	/* Turn on light sensor and let it stabilize */
     gpio_write(GPIO_PIN(0, 28), 0);
-    int adcrv = adc_sample(ADC_PIN_PA08, ADC_RES_12BIT);
+	int adcrv = adc_sample(ADC_PIN_PA08, ADC_RES_12BIT);
 	if (adcrv == -1) {
 		printf("failed to sample ADC\n");
 		critical_error();
