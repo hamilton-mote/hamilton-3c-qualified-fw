@@ -1,0 +1,5 @@
+speed 1000
+loadbin /home/hskim/Desktop/hamilton-3c-qualified-fw/app/bin/hamilton/hamilton_3c_qfw.bin 0
+r
+g
+exit

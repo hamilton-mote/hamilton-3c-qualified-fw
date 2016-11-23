@@ -13,6 +13,7 @@
 
 #include <tmp006.h>
 #include <hdc1000.h>
+#include <fxos8700.h>
 #include <periph/gpio.h>
 #include <periph/i2c.h>
 #include <periph/adc.h>
@@ -82,6 +83,7 @@ void sample_temp(temp_measurement_t *m);
 
 tmp006_t tmp006;
 hdc1000_t hdc1080;
+fxos8700_t fxos8700;
 
 uint16_t occupancy_events;
 uint16_t button_events;
@@ -112,6 +114,13 @@ void low_power_init(void) {
       return;
     } else {
       printf("hdc selftest passed");
+    }
+
+    rv = fxos8700_init(&fxos8700, I2C_0, 0x40);
+    if (rv != 0) {
+      printf("failed to initialize FXOS8700\n");
+      critical_error();
+      return;
     }
 
     // rv = tmp006_init(&tmp006, I2C_0, 0x44, TMP006_CONFIG_CR_AS4);
