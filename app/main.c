@@ -17,7 +17,7 @@
 #include <periph/i2c.h>
 #include <periph/adc.h>
 
-#define SAMPLE_INTERVAL ( 5000000UL)
+#define SAMPLE_INTERVAL ( 10000000UL)
 #define SAMPLE_JITTER   ( 2000000UL)
 
 #define MAG_ACC_TYPE_FIELD 5
@@ -78,7 +78,7 @@ void sample_temp(temp_measurement_t *m);
                       FLAG_TEMP_HAS_OCCUP)
 
 //It's actually 6.5ms but lets give it 10ms to account for oscillator etc
-#define HDC_ACQUIRE_TIME (1000000UL)
+#define HDC_ACQUIRE_TIME (20000UL)
 
 tmp006_t tmp006;
 hdc1000_t hdc1080;
@@ -86,17 +86,51 @@ hdc1000_t hdc1080;
 uint16_t occupancy_events;
 uint16_t button_events;
 
+bool pir_high;
+uint64_t pir_rise_time;
+uint32_t acc_pir_time;
+uint64_t last_pir_reset;
+
+temp_measurement_t tm __attribute__((aligned(4)));
+mag_acc_measurement_t am __attribute__((aligned(4)));
+
 void critical_error(void) {
   printf("CRITICAL ERROR, REBOOT\n");
   return;
   NVIC_SystemReset();
 }
 
+void on_pir_trig(void* arg) {
+  int pin_now = gpio_read(GPIO_PIN(0, 6));
+
+  //We were busy counting
+  if (pir_high) {
+    //Add into accumulation
+    uint64_t now = xtimer_usec_from_ticks64(xtimer_now64());
+    uint32_t delta = (uint32_t)(now - pir_rise_time);
+    acc_pir_time += delta;
+  }
+  //Pin is rising
+  if (pin_now) {
+    pir_rise_time = xtimer_usec_from_ticks64(xtimer_now64());
+    pir_high = true;
+  } else {
+    pir_high = false;
+  }
+}
+void on_button_trig(void* arg) {
+  button_events ++;
+}
 void low_power_init(void) {
     // Light sensor off
     gpio_init(GPIO_PIN(0,28), GPIO_OUT);
     gpio_write(GPIO_PIN(0, 28), 1);
     int rv;
+
+    //Init PIR accounting
+    pir_high = false;
+    // last_pir_reset = xtimer_usec_from_ticks64(xtimer_now64());
+    acc_pir_time = 0;
 
     rv = hdc1000_init(&hdc1080, I2C_0, 0x40);
     if (rv != 0) {
@@ -133,8 +167,8 @@ void low_power_init(void) {
     //   return;
     // }
 
-    //gpio_init_int(GPIO_PIN())
-
+    gpio_init_int(GPIO_PIN(PA, 18), GPIO_IN_PU, GPIO_FALLING, on_button_trig, 0);
+    gpio_init_int(GPIO_PIN(PA, 6), GPIO_IN, GPIO_BOTH, on_pir_trig, 0);
     adc_init(ADC_PIN_PA08);
 }
 
@@ -166,11 +200,12 @@ void sample_temp(temp_measurement_t *m) {
         critical_error();
         return;
     }
+  //  int adcrv = 5;
     int adcrv = adc_sample(ADC_PIN_PA08, ADC_RES_16BIT);
     printf("adcrv: %d\n", adcrv);
     m->light_lux = (int16_t) adcrv;
     /* Turn off light sensor */
-    //gpio_write(GPIO_PIN(0, 28), 1);
+    gpio_write(GPIO_PIN(0, 28), 1);
   /*  if (tmp006_read(&tmp006, (int16_t*)&m->tmp_val, (int16_t*)&m->tmp_die, &drdy)) {
         printf("failed to sample TMP %d\n", drdy);
         critical_error();
@@ -182,13 +217,17 @@ void sample_temp(temp_measurement_t *m) {
         return;
     }*/
     sample_counter++;
-
+    m->uptime = xtimer_usec_from_ticks64(xtimer_now64());
+    m->occup = ((uint64_t) acc_pir_time * 32768) / (m->uptime - last_pir_reset);
+    last_pir_reset = m->uptime;
+    acc_pir_time = 0;
     m->type = TEMP_TYPE_FIELD;
     m->flags = FLAGS_COMBO;
-    m->uptime = xtimer_usec_from_ticks64(xtimer_now64());
+
   //  printf("drdy %d\n", drdy);
-    printf("sampled lux: %d\n", (int)m->light_lux);
-    printf("sampled temp ok hdct=%d hdch=%d \n", (int)m->hdc_tmp, (int)m->hdc_hum);
+      printf("sampled lux: %d\n", (int)m->light_lux);
+      printf("sampled temp ok hdct=%d hdch=%d \n", (int)m->hdc_tmp, (int)m->hdc_hum);
+      printf("sampled PIR %d\n", (int)m->occup);
 }
 
 uint32_t interval_with_jitter(void)
@@ -199,8 +238,7 @@ uint32_t interval_with_jitter(void)
     return (uint32_t)t;
 }
 
-temp_measurement_t tm;
-mag_acc_measurement_t am;
+
 
 int main(void)
 {
