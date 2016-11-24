@@ -1,0 +1,3 @@
+[submodule "RIOT-OS"]
+	path = RIOT-OS
+	url = https://github.com/hamilton-mote/RIOT-OS
