@@ -12,16 +12,19 @@ USEMODULE += at86rf233
 # Sensors
 USEMODULE += tmp006
 USEMODULE += hdc1000
-USEMODULE += fxos8700
+#USEMODULE += fxos8700
 
 USEMODULE += xtimer
+USEMODULE += random
 
 # networking
 USEMODULE += gnrc_netdev_default
+#USEMODULE += gnrc_dutycycle
 USEMODULE += auto_init_gnrc_netif
 # Specify the mandatory networking modules for IPv6 and UDP
 USEMODULE += gnrc_ipv6
 USEMODULE += gnrc_udp
+USEMODULE += gnrc_dutymac
 # Add also the shell, some shell commands
 USEMODULE += netstats_l2
 USEMODULE += netstats_ipv6
@@ -31,7 +34,7 @@ USEMODULE += netstats_ipv6
 # development process:
 # CFLAGS += -DDEVELHELP
 
-DEFAULT_CHANNEL = 25
+DEFAULT_CHANNEL = 26
 CFLAGS += -DIEEE802154_DEFAULT_CHANNEL=$(DEFAULT_CHANNEL)
 
 QUIET ?= 1
