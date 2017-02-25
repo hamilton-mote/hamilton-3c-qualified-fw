@@ -13,6 +13,7 @@
 
 #include <tmp006.h>
 #include <hdc1000.h>
+#include <hdc1000_params.h>
 #include <periph/gpio.h>
 #include <periph/i2c.h>
 #include <periph/adc.h>
@@ -44,8 +45,8 @@ typedef struct __attribute__((packed)) {
   uint16_t flags; //which of the fields below exist
   uint16_t tmp_die;
   uint16_t tmp_val;
-  uint16_t hdc_tmp;
-  uint16_t hdc_hum;
+  int16_t hdc_tmp;
+  int16_t hdc_hum;
   uint16_t light_lux;
   uint16_t buttons;
   uint64_t uptime;
@@ -81,6 +82,9 @@ void sample_temp(temp_measurement_t *m);
 
 //It's actually 6.5*2ms but lets give it 20ms to account for oscillator etc
 #define HDC_ACQUIRE_TIME (20000UL)
+
+//It's actually 1 second, but lets give it 10% extra
+#define TMP_ACQUIRE_TIME (1100000UL)
 
 tmp006_t tmp006;
 hdc1000_t hdc1080;
@@ -123,6 +127,14 @@ void on_pir_trig(void* arg) {
 void on_button_trig(void* arg) {
   button_events ++;
 }
+
+hdc1000_params_t hdcp = {
+  I2C_0,
+  0x40,
+  HDC1000_14BIT,
+};
+
+
 void low_power_init(void) {
     // Light sensor off
     gpio_init(GPIO_PIN(0,28), GPIO_OUT);
@@ -131,45 +143,42 @@ void low_power_init(void) {
     gpio_write(GPIO_PIN(0, 19), 0);
     int rv;
 
+
     //Init PIR accounting
     pir_high = false;
     last_pir_reset = xtimer_usec_from_ticks64(xtimer_now64());
     acc_pir_time = 0;
     button_events = 0;
-    rv = hdc1000_init(&hdc1080, I2C_0, 0x40);
+    rv = hdc1000_init(&hdc1080, &hdcp);
     if (rv != 0) {
-      printf("failed to initialize HDC1008\n");
+      printf("failed to initialize HDC1080 %d\n", rv);
       critical_error();
       return;
     }
 
-    rv = hdc1000_test(&hdc1080);
-    if (rv != 0) {
-      printf("hdc1080 failed self test\n");
-      critical_error();
-      return;
-    } else {
-      printf("hdc selftest passed");
-    }
 
-    // rv = tmp006_init(&tmp006, I2C_0, 0x44, TMP006_CONFIG_CR_AS4);
-    // if (rv != 0) {
-    //   printf("failed to initialize TMP006\n");
-    //   critical_error();
-    //   return;
-    // }
-    // rv = tmp006_test(&tmp006);
-    // if (rv != 0) {
-    //   printf("tmp006 failed self test\n");
-    //   critical_error();
-    //   return;
-    // }
-    // rv = tmp006_set_standby(&tmp006);
-    // if (rv != 0) {
-    //   printf("failed to standby TMP006\n");
-    //   critical_error();
-    //   return;
-    // }
+   rv = tmp006_init(&tmp006, I2C_0, 0x44, TMP006_CONFIG_CR_AS4);
+   if (rv != 0) {
+     printf("failed to initialize TMP006\n");
+     critical_error();
+     return;
+   } else {
+     printf("TMP006 init ok\n");
+   }
+   rv = tmp006_test(&tmp006);
+   if (rv != 0) {
+     printf("tmp006 failed self test\n");
+     critical_error();
+     return;
+   } else {
+     printf("TMP006 self test ok\n");
+   }
+   rv = tmp006_set_standby(&tmp006);
+   if (rv != 0) {
+     printf("failed to standby TMP006\n");
+     critical_error();
+     return;
+   }
 
     gpio_init_int(GPIO_PIN(PA, 18), GPIO_IN_PU, GPIO_FALLING, on_button_trig, 0);
     gpio_init_int(GPIO_PIN(PA, 6), GPIO_IN, GPIO_BOTH, on_pir_trig, 0);
@@ -188,34 +197,34 @@ void sample_temp(temp_measurement_t *m) {
     /* turn on light sensor and let it stabilize */
     gpio_write(GPIO_PIN(0, 28), 0);
 
-    /* turn on LED */
-    gpio_write(GPIO_PIN(0, 19), 1);
+    uint8_t drdy;
 
-  /*  if (tmp006_set_active(&tmp006)) {
+
+
+    if (tmp006_set_active(&tmp006)) {
         printf("failed to active TMP006\n");
         critical_error();
         return;
-    }*/
-    if (hdc1000_startmeasure(&hdc1080)) {
-        printf("failed to start hdc1080 measurement\n");
-        critical_error();
-        return;
     }
+    hdc1000_trigger_conversion(&hdc1080);
+
+    /* turn on LED */
+    gpio_write(GPIO_PIN(0, 19), 1);
+
     xtimer_usleep(HDC_ACQUIRE_TIME);
-    if(hdc1000_read(&hdc1080, &m->hdc_tmp, &m->hdc_hum)) {
-        printf("failed to sample HDC\n");
-        critical_error();
-        return;
-    }
+
+    /* turn off LED */
+    gpio_write(GPIO_PIN(0, 19), 0);
+
+    hdc1000_read(&hdc1080, &m->hdc_tmp, &m->hdc_hum);
   //  int adcrv = 5;
     int adcrv = adc_sample(ADC_PIN_PA08, ADC_RES_16BIT);
-    printf("adcrv: %d\n", adcrv);
     m->light_lux = (int16_t) adcrv;
     /* Turn off light sensor */
     gpio_write(GPIO_PIN(0, 28), 1);
-    /* turn off LED */
-    gpio_write(GPIO_PIN(0, 19), 0);
-  /*  if (tmp006_read(&tmp006, (int16_t*)&m->tmp_val, (int16_t*)&m->tmp_die, &drdy)) {
+
+    xtimer_usleep(TMP_ACQUIRE_TIME);
+    if (tmp006_read(&tmp006, (int16_t*)&m->tmp_val, (int16_t*)&m->tmp_die, &drdy)) {
         printf("failed to sample TMP %d\n", drdy);
         critical_error();
         return;
@@ -224,7 +233,7 @@ void sample_temp(temp_measurement_t *m) {
         printf("failed to standby the TMP\n");
         critical_error();
         return;
-    }*/
+    }
     sample_counter++;
     m->uptime = xtimer_usec_from_ticks64(xtimer_now64());
     m->occup = ((uint64_t) acc_pir_time * 32768) / (m->uptime - last_pir_reset);
@@ -234,9 +243,10 @@ void sample_temp(temp_measurement_t *m) {
     m->flags = FLAGS_COMBO;
     m->buttons = button_events;
 
-  //  printf("drdy %d\n", drdy);
+      printf("drdy %d\n", drdy);
       printf("sampled lux: %d\n", (int)m->light_lux);
       printf("sampled temp ok hdct=%d hdch=%d \n", (int)m->hdc_tmp, (int)m->hdc_hum);
+      printf("sampled rad ok tdie=%d tval=%d \n", (int)m->tmp_die, (int)m->tmp_die);
       printf("sampled PIR %d\n", (int)m->occup);
       printf("buttone %d\n", (int)m->buttons);
 }
