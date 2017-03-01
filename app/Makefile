@@ -12,6 +12,7 @@ USEMODULE += at86rf233
 # Sensors
 USEMODULE += tmp006
 USEMODULE += hdc1000
+USEMODULE += fxos8700
 
 USEMODULE += xtimer
 
