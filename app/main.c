@@ -20,8 +20,8 @@
 #include <periph/i2c.h>
 #include <periph/adc.h>
 
-#define SAMPLE_INTERVAL ( 30000000UL)
-// #define SAMPLE_INTERVAL ( 10000000UL)
+// #define SAMPLE_INTERVAL ( 30000000UL)
+#define SAMPLE_INTERVAL ( 10000000UL)
 #define SAMPLE_JITTER   ( 2000000UL)
 
 #define TYPE_FIELD 8
@@ -188,8 +188,6 @@ void sample(ham7c_t *m) {
     /* turn on light sensor and let it stabilize */
     gpio_write(GPIO_PIN(0, 28), 0);
 
-
-
     if (tmp006_set_active(&tmp006)) {
         printf("failed to active TMP006\n");
         critical_error();
@@ -198,12 +196,12 @@ void sample(ham7c_t *m) {
     hdc1000_trigger_conversion(&hdc1080);
 
     /* turn on LED */
-  //  gpio_write(GPIO_PIN(0, 19), 1);
+    gpio_write(GPIO_PIN(0, 19), 1);
 
     xtimer_usleep(HDC_ACQUIRE_TIME);
 
     /* turn off LED */
-  //  gpio_write(GPIO_PIN(0, 19), 0);
+    gpio_write(GPIO_PIN(0, 19), 0);
 
     hdc1000_read(&hdc1080, &m->hdc_tmp, &m->hdc_hum);
     m->light_lux = (int16_t) adc_sample(ADC_PIN_PA08, ADC_RES_16BIT);
