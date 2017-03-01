@@ -143,6 +143,12 @@ void low_power_init(void) {
     gpio_write(GPIO_PIN(0, 19), 0);
     int rv;
 
+    rv = fxos8700_init(&fxos8700, I2C_0, 0x1e);
+    if (rv != 0) {
+      printf("failed to initialize FXO on %d\n", rv);
+      critical_error();
+      return;
+    }
 
     //Init PIR accounting
     pir_high = false;
@@ -156,33 +162,33 @@ void low_power_init(void) {
       return;
     }
 
-
-   rv = tmp006_init(&tmp006, I2C_0, 0x44, TMP006_CONFIG_CR_AS4);
-   if (rv != 0) {
-     printf("failed to initialize TMP006\n");
-     critical_error();
-     return;
-   } else {
-     printf("TMP006 init ok\n");
-   }
-   rv = tmp006_test(&tmp006);
-   if (rv != 0) {
-     printf("tmp006 failed self test\n");
-     critical_error();
-     return;
-   } else {
-     printf("TMP006 self test ok\n");
-   }
-   rv = tmp006_set_standby(&tmp006);
-   if (rv != 0) {
-     printf("failed to standby TMP006\n");
-     critical_error();
-     return;
-   }
+    rv = tmp006_init(&tmp006, I2C_0, 0x44, TMP006_CONFIG_CR_AS4);
+    if (rv != 0) {
+      printf("failed to initialize TMP006\n");
+      critical_error();
+      return;
+    } else {
+      printf("TMP006 init ok\n");
+    }
+    rv = tmp006_test(&tmp006);
+    if (rv != 0) {
+      printf("tmp006 failed self test\n");
+      critical_error();
+      return;
+    } else {
+      printf("TMP006 self test ok\n");
+    }
+    rv = tmp006_set_standby(&tmp006);
+    if (rv != 0) {
+      printf("failed to standby TMP006\n");
+      critical_error();
+      return;
+    }
 
     gpio_init_int(GPIO_PIN(PA, 18), GPIO_IN_PU, GPIO_FALLING, on_button_trig, 0);
     gpio_init_int(GPIO_PIN(PA, 6), GPIO_IN, GPIO_BOTH, on_pir_trig, 0);
     adc_init(ADC_PIN_PA08);
+
 }
 
 void sample_mag(mag_acc_measurement_t *m) {
@@ -198,8 +204,6 @@ void sample_temp(temp_measurement_t *m) {
     gpio_write(GPIO_PIN(0, 28), 0);
 
     uint8_t drdy;
-
-
 
     if (tmp006_set_active(&tmp006)) {
         printf("failed to active TMP006\n");
@@ -217,9 +221,9 @@ void sample_temp(temp_measurement_t *m) {
     gpio_write(GPIO_PIN(0, 19), 0);
 
     hdc1000_read(&hdc1080, &m->hdc_tmp, &m->hdc_hum);
-  //  int adcrv = 5;
     int adcrv = adc_sample(ADC_PIN_PA08, ADC_RES_16BIT);
     m->light_lux = (int16_t) adcrv;
+    
     /* Turn off light sensor */
     gpio_write(GPIO_PIN(0, 28), 1);
 
