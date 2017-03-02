@@ -28,7 +28,7 @@ These average power figures are very accurate for a 25C environment.
 
 ## Power profile
 
-The power consumption profile looks like the following figure:
+The power consumption profile looks like the following figure. Due to our measurement technique, the Y axis is only an approximation of the instantaneous power consumption. The average power figures above are far more accurate.
 
 ![Full Profile](doc/full_cycle.png)
 
