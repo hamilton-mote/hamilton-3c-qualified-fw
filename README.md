@@ -47,3 +47,9 @@ If the PIR sensor is triggering, there will be periodic events that look as foll
 ![PIR trigger event](doc/pir_trigger.png)
 
 These are basically the chip waking up and recording the timestamp of the PIR event for later aggregation.
+
+## Changelog
+
+This is version 2.0 of Hamilton-3C QFW.
+
+- Changes from <2.0 include adding support for all sensors
