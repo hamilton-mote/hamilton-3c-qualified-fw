@@ -18,7 +18,7 @@ The power consumption of a 7C with this firmware has been measured at
   NEVER    |  9 uA             | 19.0 years          |
 
 The ideal battery life is assuming a 1500mAh battery with no self-discharge. In
-real life, results will vary.
+real life, results will vary. The power consumption is given as the current term, multiply by the system voltage to get the power. We have found that the whole system current only varies slightly with voltage, so it is more useful to record the current than the power. (In other words at 2.2v instead of 3.3v the idle current will still be 9uA but the "power" will drop by 33%).
 
 These results are taken in an unoccupied room. The hamilton-7C consumes on average
 75uA if the PIR sensor is continuously triggered while the firmware is configured for
