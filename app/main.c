@@ -22,7 +22,7 @@
 
 //#define SAMPLE_INTERVAL ( 5000000UL)
 #ifndef SAMPLE_INTERVAL
-#define SAMPLE_INTERVAL ( 30000000UL)
+#define SAMPLE_INTERVAL ( 10000000UL)
 #endif
 #define SAMPLE_JITTER   ( 2000000UL)
 
@@ -71,7 +71,7 @@ typedef struct __attribute__((packed,aligned(4))) {
 #define FLAG_OCCUP    (1<<6)
 
 //All of the flags
-#define PROVIDED_FLAGS (0x7F)
+#define PROVIDED_FLAGS (0x7B)
 
 //It's actually 6.5*2ms but lets give it 15ms to account for oscillator etc
 #define HDC_ACQUIRE_TIME (15000UL)
@@ -172,6 +172,7 @@ void low_power_init(void) {
       return;
     }
 
+#if 0
     rv = tmp006_init(&tmp006, I2C_0, 0x44, TMP006_CONFIG_CR_AS2);
     if (rv != 0) {
       printf("failed to initialize TMP006\n");
@@ -194,6 +195,7 @@ void low_power_init(void) {
       critical_error();
       return;
     }
+#endif
 
     gpio_init_int(GPIO_PIN(PA, 18), GPIO_IN_PU, GPIO_FALLING, on_button_trig, 0);
     //gpio_init(GPIO_PIN(PA, 6), GPIO_IN_PD);
@@ -203,17 +205,19 @@ void low_power_init(void) {
 }
 
 void sample(ham7c_t *m) {
-    uint8_t drdy;
+    //uint8_t drdy;
 
     /* turn on light sensor and let it stabilize */
     gpio_write(GPIO_PIN(0, 28), 0);
 
+#if 0
     /* start the TMP acquisition */
     if (tmp006_set_active(&tmp006)) {
         printf("failed to active TMP006\n");
         critical_error();
         return;
     }
+    #endif
 
     /* start the HDC acquisition */
     hdc1000_trigger_conversion(&hdc1080);
@@ -242,18 +246,20 @@ void sample(ham7c_t *m) {
       return;
     }
     fxos8700_set_idle(&fxos8700);
-
+    #if 0
     xtimer_usleep(TMP_OFFSET_ACQUIRE_TIME);
     if (tmp006_read(&tmp006, (int16_t*)&m->tmp_val, (int16_t*)&m->tmp_die, &drdy)) {
         printf("failed to sample TMP %d\n", drdy);
         critical_error();
         return;
     }
+
     if (tmp006_set_standby(&tmp006)) {
         printf("failed to standby the TMP\n");
         critical_error();
         return;
     }
+    #endif
 
 
     m->acc_x = fm.acc_x;
