@@ -22,7 +22,7 @@
 
 //#define SAMPLE_INTERVAL ( 5000000UL)
 #ifndef SAMPLE_INTERVAL
-#define SAMPLE_INTERVAL ( 30000000UL)
+#define SAMPLE_INTERVAL ( 10000000UL)
 #endif
 #define SAMPLE_JITTER   ( 2000000UL)
 
@@ -255,7 +255,7 @@ void sample(ham7c_t *m) {
         return;
     }
 
-
+    m->serial = *fb_device_id;
     m->acc_x = fm.acc_x;
     m->acc_y = fm.acc_y;
     m->acc_z = fm.acc_z;
@@ -305,6 +305,12 @@ void crypto_init(void){
   for (int i = 0; i < 16; i++) {
     iv[i] = i;
   }
+  //printf("us: %d\n", *fb_device_id);
+  //printf("key: ");
+  //for (int i = 0; i < 16; i++) {
+  //  printf("%02x", fb_aes128_key[i]);
+  //}
+  //printf("\n");
   int rv = cipher_init(&aesc, CIPHER_AES_128, fb_aes128_key, 16);
   if (rv != CIPHER_INIT_SUCCESS) {
     printf("failed to init cipher\n");
