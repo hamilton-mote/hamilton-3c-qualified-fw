@@ -263,7 +263,7 @@ void sample(ham7c_t *m) {
     m->mag_y = fm.mag_y;
     m->mag_z = fm.mag_z;
     m->uptime = xtimer_usec_from_ticks64(xtimer_now64());
-    m->occup = (uint16_t)((uint64_t) acc_pir_time * 32768) / (m->uptime - last_pir_reset);
+    m->occup = (uint16_t)(((uint64_t) acc_pir_time * 32767) / (m->uptime - last_pir_reset));
     last_pir_reset = m->uptime;
     acc_pir_time = 0;
     m->type = TYPE_FIELD;
