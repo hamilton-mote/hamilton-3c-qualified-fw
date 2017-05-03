@@ -1,6 +1,11 @@
 APPLICATION = hamilton_3c_qfw
 RIOTBASE = $(CURDIR)/../RIOT-OS
 BOARD = hamilton
+
+# If you define this, PIR will not be sampled (Hamilton-3C)
+# if it is not defined, it will be (Hamilton-7C)
+CFLAGS += -DHAMILTON_3C_ONLY
+
 USEMODULE += rtt_stdio
 CFLAGS += -DRTT_STDIO_DISABLE_STDIN
 CFLAGS += -DSOCK_HAS_IPV6

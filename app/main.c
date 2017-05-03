@@ -71,7 +71,11 @@ typedef struct __attribute__((packed,aligned(4))) {
 #define FLAG_OCCUP    (1<<6)
 
 //All of the flags
+#ifndef HAMILTON_3C_ONLY
 #define PROVIDED_FLAGS (0x7F)
+#else
+#define PROVIDED_FLAGS (0x3F)
+#endif
 
 //It's actually 6.5*2ms but lets give it 15ms to account for oscillator etc
 #define HDC_ACQUIRE_TIME (15000UL)
@@ -196,8 +200,10 @@ void low_power_init(void) {
     }
 
     gpio_init_int(GPIO_PIN(PA, 18), GPIO_IN_PU, GPIO_FALLING, on_button_trig, 0);
+    #ifndef HAMILTON_3C_ONLY
     //gpio_init(GPIO_PIN(PA, 6), GPIO_IN_PD);
     gpio_init_int(GPIO_PIN(PA, 6), GPIO_IN_PD, GPIO_BOTH, on_pir_trig, 0);
+    #endif
     adc_init(ADC_PIN_PA08);
 
 }
@@ -263,9 +269,13 @@ void sample(ham7c_t *m) {
     m->mag_y = fm.mag_y;
     m->mag_z = fm.mag_z;
     m->uptime = xtimer_usec_from_ticks64(xtimer_now64());
+    #ifndef HAMILTON_3C_ONLY
     m->occup = (uint16_t)(((uint64_t) acc_pir_time * 32767) / (m->uptime - last_pir_reset));
     last_pir_reset = m->uptime;
     acc_pir_time = 0;
+    #else
+    m->occup = 0;
+    #endif
     m->type = TYPE_FIELD;
     m->flags = PROVIDED_FLAGS;
     m->buttons = button_events;
