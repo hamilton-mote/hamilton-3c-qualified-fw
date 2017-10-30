@@ -42,9 +42,10 @@ typedef struct __attribute__((packed,aligned(4))) {
   int16_t  mag_x;
   int16_t  mag_y;
   int16_t  mag_z;
-  int16_t  radtemp;
-  int16_t  temp;
-  int16_t  hum;
+  int16_t  tmp_die;
+  int16_t  tmp_val;
+  int16_t  hdc_temp;
+  int16_t  hdc_hum;
   int16_t  light_lux;
   uint16_t buttons;
   uint16_t occup;
@@ -216,8 +217,8 @@ void sample(ham7c_t *m) {
     /* Radient temperature 1-dim */
     dim = saul_reg_read(sensor_radtemp_t, &output); /* 500ms */
     if (dim > 0) {
-        m->temp = output.val[0];
-        m->radtemp = output.val[1];
+        m->tmp_die = output.val[1];
+        m->tmp_val = output.val[0];
         // printf("\nDev: %s\tType: %s\n", sensor_radtemp_t->name,
         //         saul_class_to_str(sensor_radtemp_t->driver->type));
         //phydat_dump(&output, dim);
@@ -228,7 +229,7 @@ void sample(ham7c_t *m) {
     /* Temperature 1-dim */
     dim = saul_reg_read(sensor_temp_t, &output); /* 15ms */
     if (dim > 0) {
-        m->temp = output.val[0];
+        m->hdc_temp = output.val[0];
         // printf("\nDev: %s\tType: %s\n", sensor_temp_t->name,
         //         saul_class_to_str(sensor_temp_t->driver->type));
         //phydat_dump(&output, dim);
@@ -240,7 +241,7 @@ void sample(ham7c_t *m) {
     LED_ON;
     dim = saul_reg_read(sensor_hum_t, &output); /* 15ms */
     if (dim > 0) {
-        m->hum = output.val[0];
+        m->hdc_hum = output.val[0];
         // printf("\nDev: %s\tType: %s\n", sensor_hum_t->name,
         //         saul_class_to_str(sensor_hum_t->driver->type));
         //phydat_dump(&output, dim);

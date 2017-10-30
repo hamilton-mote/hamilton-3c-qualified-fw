@@ -2,7 +2,7 @@ APPLICATION = hamilton_3c_qfw
 RIOTBASE = $(CURDIR)/../RIOT-OS
 BOARD = hamilton
 
-CFLAGS += -DMODEL_7C
+CFLAGS += -DMODEL_3C
 
 # System functions
 USEMODULE += random
