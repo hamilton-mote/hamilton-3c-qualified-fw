@@ -1,32 +1,26 @@
 #include <stdio.h>
 #include <rtt_stdio.h>
-#include "thread.h"
 #include "xtimer.h"
 #include <string.h>
-
-#include "msg.h"
-#include "net/gnrc.h"
-#include "net/gnrc/ipv6.h"
 #include "net/gnrc/udp.h"
-#include "net/gnrc/netapi.h"
-#include "net/gnrc/netreg.h"
+#include "phydat.h"
+#include "saul_reg.h"
+#include "periph/adc.h"
+#include "periph/i2c.h"
+#include "periph/spi.h"
+//#include "periph/dmac.h"
+#include "periph/timer.h"
 
-#include <tmp006.h>
-#include <hdc1000.h>
-#include <hdc1000_params.h>
-#include <fxos8700.h>
+#define ENABLE_DEBUG    (0)
+#include "debug.h"
 
-#include <periph/gpio.h>
-#include <periph/i2c.h>
-#include <periph/adc.h>
-
-//#define SAMPLE_INTERVAL ( 5000000UL)
 #ifndef SAMPLE_INTERVAL
-#define SAMPLE_INTERVAL ( 10000000UL)
+#define SAMPLE_INTERVAL (20000000UL)
 #endif
-#define SAMPLE_JITTER   ( 2000000UL)
+#define SAMPLE_JITTER    (2000000UL)
 
 #define TYPE_FIELD 8
+
 
 void send_udp(char *addr_str, uint16_t port, uint8_t *data, uint16_t datalen);
 
@@ -42,17 +36,16 @@ typedef struct __attribute__((packed,aligned(4))) {
   //uptime is strictly monotonic
   uint64_t uptime;
   uint16_t flags; //which of the fields below exist
-  int16_t acc_x;
-  int16_t acc_y;
-  int16_t acc_z;
-  int16_t mag_x;
-  int16_t mag_y;
-  int16_t mag_z;
-  uint16_t tmp_die;
-  uint16_t tmp_val;
-  int16_t hdc_tmp;
-  int16_t hdc_hum;
-  uint16_t light_lux;
+  int16_t  acc_x;
+  int16_t  acc_y;
+  int16_t  acc_z;
+  int16_t  mag_x;
+  int16_t  mag_y;
+  int16_t  mag_z;
+  int16_t  radtemp;
+  int16_t  temp;
+  int16_t  hum;
+  int16_t  light_lux;
   uint16_t buttons;
   uint16_t occup;
   uint32_t reserved1;
@@ -60,6 +53,14 @@ typedef struct __attribute__((packed,aligned(4))) {
   uint32_t reserved3;
 } ham7c_t;
 
+saul_reg_t *sensor_radtemp_t = NULL;
+saul_reg_t *sensor_temp_t    = NULL;
+saul_reg_t *sensor_hum_t     = NULL;
+saul_reg_t *sensor_mag_t     = NULL;
+saul_reg_t *sensor_accel_t   = NULL;
+saul_reg_t *sensor_light_t   = NULL;
+saul_reg_t *sensor_occup_t   = NULL;
+saul_reg_t *sensor_button_t  = NULL;
 
 //Uptime is mandatory (for AES security)
 #define FLAG_ACC    (1<<0)
@@ -70,232 +71,200 @@ typedef struct __attribute__((packed,aligned(4))) {
 #define FLAG_BUTTONS  (1<<5)
 #define FLAG_OCCUP    (1<<6)
 
-//All of the flags
-#ifndef HAMILTON_3C_ONLY
+#if defined(MODEL_3C)
+#define PROVIDED_FLAGS (0x3F)
+#elif defined(MODEL_7C)
 #define PROVIDED_FLAGS (0x7F)
 #else
-#define PROVIDED_FLAGS (0x3F)
+#error "No model defined"
 #endif
 
-//It's actually 6.5*2ms but lets give it 15ms to account for oscillator etc
-#define HDC_ACQUIRE_TIME (15000UL)
-//#define HDC_ACQUIRE_TIME (40000UL)
-
-//It's actually 500ms, but lets give it 10% extra
-#define TMP_ACQUIRE_TIME (550000UL)
-
-//We start the TMP before
-#define EMPIRICAL_ACQUISITION_DELAY (22000UL)
-#define TMP_OFFSET_ACQUIRE_TIME (TMP_ACQUIRE_TIME-EMPIRICAL_ACQUISITION_DELAY)
-
-tmp006_t tmp006;
-hdc1000_t hdc1080;
-fxos8700_t fxos8700;
-
-uint16_t occupancy_events;
-uint16_t button_events;
-
-bool pir_high;
-uint64_t pir_rise_time;
-uint32_t acc_pir_time;
-uint64_t last_pir_reset;
-
-void dutycycling_init(void) {
-  /* Leaf nodes: Low power operation and auto duty-cycling */
-  kernel_pid_t radio[GNRC_NETIF_NUMOF];
-  uint8_t radio_num = gnrc_netif_get(radio);
-  netopt_enable_t dutycycling;
-  if (DUTYCYCLE_SLEEP_INTERVAL) {
-    dutycycling = NETOPT_ENABLE;
-  } else {
-    dutycycling = NETOPT_DISABLE;
-  }
-  for (int i=0; i < radio_num; i++)
-    gnrc_netapi_set(radio[i], NETOPT_DUTYCYCLE, 0, &dutycycling, sizeof(netopt_t));
-}
-
 void critical_error(void) {
-  printf("CRITICAL ERROR, REBOOT\n");
-  NVIC_SystemReset();
-  return;
+    DEBUG("CRITICAL ERROR, REBOOT\n");
+    NVIC_SystemReset();
+    return;
 }
 
-void on_pir_trig(void* arg) {
-  int pin_now = gpio_read(GPIO_PIN(0, 6));
-
-  //We were busy counting
-  if (pir_high) {
-    //Add into accumulation
-    uint64_t now = xtimer_usec_from_ticks64(xtimer_now64());
-    uint32_t delta = (uint32_t)(now - pir_rise_time);
-    acc_pir_time += delta;
-  }
-  //Pin is rising
-  if (pin_now) {
-    pir_rise_time = xtimer_usec_from_ticks64(xtimer_now64());
-    pir_high = true;
-  } else {
-    pir_high = false;
-  }
-}
-void on_button_trig(void* arg) {
-  button_events ++;
-}
-
-hdc1000_params_t hdcp = {
-  I2C_0,
-  0x40,
-  HDC1000_14BIT,
-};
-
-
-void low_power_init(void) {
-    // Light sensor off
-    gpio_init(GPIO_PIN(0,28), GPIO_OUT);
-    gpio_init(GPIO_PIN(0,19), GPIO_OUT);
-    gpio_write(GPIO_PIN(0, 28), 1);
-    gpio_write(GPIO_PIN(0, 19), 0);
-    int rv;
-
-    rv = fxos8700_init(&fxos8700, I2C_0, 0x1e);
-    if (rv != 0) {
-      printf("failed to initialize FXO on %d\n", rv);
-      critical_error();
-      return;
-    }
-
-    //Init PIR accounting
-    pir_high = false;
-    last_pir_reset = xtimer_usec_from_ticks64(xtimer_now64());
-    acc_pir_time = 0;
-    button_events = 0;
-    rv = hdc1000_init(&hdc1080, &hdcp);
-    if (rv != 0) {
-      printf("failed to initialize HDC1080 %d\n", rv);
-      critical_error();
-      return;
-    }
-
-    rv = tmp006_init(&tmp006, I2C_0, 0x44, TMP006_CONFIG_CR_AS2);
-    if (rv != 0) {
-      printf("failed to initialize TMP006\n");
-      critical_error();
-      return;
+void sensor_config(void) {
+    sensor_radtemp_t = saul_reg_find_type(SAUL_SENSE_RADTEMP);
+    if (sensor_radtemp_t == NULL) {
+        DEBUG("[ERROR] Failed to init RADTEMP sensor\n");
+        critical_error();
     } else {
-      printf("TMP006 init ok\n");
+        DEBUG("TEMP sensor OK\n");
     }
-    rv = tmp006_test(&tmp006);
-    if (rv != 0) {
-      printf("tmp006 failed self test\n");
-      critical_error();
-      return;
+
+    sensor_hum_t     = saul_reg_find_type(SAUL_SENSE_HUM);
+    if (sensor_hum_t == NULL) {
+        DEBUG("[ERROR] Failed to init HUM sensor\n");
+        critical_error();
     } else {
-      printf("TMP006 self test ok\n");
-    }
-    rv = tmp006_set_standby(&tmp006);
-    if (rv != 0) {
-      printf("failed to standby TMP006\n");
-      critical_error();
-      return;
+        DEBUG("HUM sensor OK\n");
     }
 
-    gpio_init_int(GPIO_PIN(PA, 18), GPIO_IN_PU, GPIO_FALLING, on_button_trig, 0);
-    #ifndef HAMILTON_3C_ONLY
-    //gpio_init(GPIO_PIN(PA, 6), GPIO_IN_PD);
-    gpio_init_int(GPIO_PIN(PA, 6), GPIO_IN_PD, GPIO_BOTH, on_pir_trig, 0);
-    #endif
-    adc_init(ADC_PIN_PA08);
+    sensor_temp_t    = saul_reg_find_type(SAUL_SENSE_TEMP);
+    if (sensor_temp_t == NULL) {
+		DEBUG("[ERROR] Failed to init TEMP sensor\n");
+		critical_error();
+	} else {
+		DEBUG("TEMP sensor OK\n");
+	}
 
+    sensor_mag_t     = saul_reg_find_type(SAUL_SENSE_MAG);
+    if (sensor_mag_t == NULL) {
+		DEBUG("[ERROR] Failed to init MAGNETIC sensor\n");
+		critical_error();
+	} else {
+		DEBUG("MAGNETIC sensor OK\n");
+	}
+
+    sensor_accel_t   = saul_reg_find_type(SAUL_SENSE_ACCEL);
+    if (sensor_accel_t == NULL) {
+		DEBUG("[ERROR] Failed to init ACCEL sensor\n");
+		critical_error();
+	} else {
+		DEBUG("ACCEL sensor OK\n");
+	}
+
+    sensor_light_t   = saul_reg_find_type(SAUL_SENSE_LIGHT);
+	if (sensor_light_t == NULL) {
+		DEBUG("[ERROR] Failed to init LIGHT sensor\n");
+		critical_error();
+	} else {
+		DEBUG("LIGHT sensor OK\n");
+	}
+
+    sensor_occup_t   = saul_reg_find_type(SAUL_SENSE_OCCUP);
+	if (sensor_occup_t == NULL) {
+		DEBUG("[ERROR] Failed to init OCCUP sensor\n");
+		critical_error();
+	} else {
+		DEBUG("OCCUP sensor OK\n");
+	}
+
+    sensor_button_t  = saul_reg_find_type(SAUL_SENSE_COUNT);
+    if (sensor_button_t == NULL) {
+        DEBUG("[ERROR] Failed to init BUTTON sensor\n");
+        critical_error();
+    } else {
+        DEBUG("BUTTON sensor OK\n");
+    }
 }
 
+/* ToDo: Sampling sequence arrangement or thread/interrupt based sensing may be better */
 void sample(ham7c_t *m) {
-    uint8_t drdy;
+    phydat_t output; /* Sensor output data (maximum 3-dimension)*/
+	   int dim;         /* Demension of sensor output */
 
-    /* turn on light sensor and let it stabilize */
-    gpio_write(GPIO_PIN(0, 28), 0);
-
-    /* start the TMP acquisition */
-    if (tmp006_set_active(&tmp006)) {
-        printf("failed to active TMP006\n");
-        critical_error();
-        return;
+    /* Occupancy 1-dim */
+    #if ((PROVIDED_FLAGS & FLAG_OCCUP) != 0)
+    dim = saul_reg_read(sensor_occup_t, &output);
+    if (dim > 0) {
+        m->occup = output.val[0];
+        // printf("\nDev: %s\tType: %s\n", sensor_occup_t->name,
+        //         saul_class_to_str(sensor_occup_t->driver->type));
+        // phydat_dump(&output, dim);
+    } else {
+        DEBUG("[ERROR] Failed to read Occupancy\n");
     }
-
-    /* start the HDC acquisition */
-    hdc1000_trigger_conversion(&hdc1080);
-
-    /* turn on LED */
-    gpio_write(GPIO_PIN(0, 19), 1);
-
-    /* wait for HDC */
-    xtimer_usleep(HDC_ACQUIRE_TIME);
-
-    /* turn off LED */
-    gpio_write(GPIO_PIN(0, 19), 0);
-
-    hdc1000_get_results(&hdc1080, &m->hdc_tmp, &m->hdc_hum);
-    m->light_lux = (int16_t) adc_sample(ADC_PIN_PA08, ADC_RES_16BIT);
-
-    /* Turn off light sensor */
-    gpio_write(GPIO_PIN(0, 28), 1);
-
-    /* sample accel/mag */
-    fxos8700_set_active(&fxos8700);
-    fxos8700_measurement_t fm;
-    if (fxos8700_read(&fxos8700, &fm)) {
-      printf("failed to sample fxos8700\n");
-      critical_error();
-      return;
-    }
-    fxos8700_set_idle(&fxos8700);
-
-    xtimer_usleep(TMP_OFFSET_ACQUIRE_TIME);
-    if (tmp006_read(&tmp006, (int16_t*)&m->tmp_val, (int16_t*)&m->tmp_die, &drdy)) {
-        printf("failed to sample TMP %d\n", drdy);
-        critical_error();
-        return;
-    }
-    if (tmp006_set_standby(&tmp006)) {
-        printf("failed to standby the TMP\n");
-        critical_error();
-        return;
-    }
-
-    m->serial = *fb_device_id;
-    m->acc_x = fm.acc_x;
-    m->acc_y = fm.acc_y;
-    m->acc_z = fm.acc_z;
-    m->mag_x = fm.mag_x;
-    m->mag_y = fm.mag_y;
-    m->mag_z = fm.mag_z;
-    m->uptime = xtimer_usec_from_ticks64(xtimer_now64());
-    #ifndef HAMILTON_3C_ONLY
-    m->occup = (uint16_t)(((uint64_t) acc_pir_time * 32767) / (m->uptime - last_pir_reset));
-    last_pir_reset = m->uptime;
-    acc_pir_time = 0;
-    #else
-    m->occup = 0;
     #endif
-    m->type = TYPE_FIELD;
-    m->flags = PROVIDED_FLAGS;
-    m->buttons = button_events;
 
-    // int32_t t = (((int32_t)m->tmp_die)*3125)/4000;
-    // printf("drdy %d\n", drdy);
-    // printf("sampled lux: %d\n", (int)m->light_lux);
-    // printf("sampled temp ok hdct=%d hdch=%d \n", (int)m->hdc_tmp, (int)m->hdc_hum);
-    // printf("sampled rad ok tdie=%d tval=%d \n", (int)t, (int)m->tmp_val);
-    // printf("sampled PIR %d\n", (int)m->occup);
-    // printf("buttone %d\n", (int)m->buttons);
-    // printf("sampled acc x=%d y=%d z=%d\n", (int)m->acc_x, (int)m->acc_y, (int)m->acc_z);
-    // printf("sampled mag x=%d y=%d z=%d\n", (int)m->mag_x, (int)m->mag_y, (int)m->mag_z);
+    /* Push button events 1-dim */
+    dim = saul_reg_read(sensor_button_t, &output);
+    if (dim > 0) {
+        m->buttons = output.val[0];
+        // printf("\nDev: %s\tType: %s\n", sensor_button_t->name,
+        //         saul_class_to_str(sensor_button_t->driver->type));
+        //phydat_dump(&output, dim);
+    } else {
+        DEBUG("[ERROR] Failed to read button events\n");
+    }
+
+    /* Illumination 1-dim */
+	dim = saul_reg_read(sensor_light_t, &output);
+	if (dim > 0) {
+		m->light_lux = output.val[0];
+		// printf("\nDev: %s\tType: %s\n", sensor_light_t->name,
+		// 				saul_class_to_str(sensor_light_t->driver->type));
+		//phydat_dump(&output, dim);
+	} else {
+		DEBUG("[ERROR] Failed to read Illumination\n");
+	}
+
+    /* Magnetic field 3-dim */
+    dim = saul_reg_read(sensor_mag_t, &output);
+    if (dim > 0) {
+        m->mag_x = output.val[0]; m->mag_y = output.val[1]; m->mag_z = output.val[2];
+        // printf("\nDev: %s\tType: %s\n", sensor_mag_t->name,
+        //         saul_class_to_str(sensor_mag_t->driver->type));
+        //phydat_dump(&output, dim);
+    } else {
+        DEBUG("[ERROR] Failed to read magnetic field\n");
+    }
+
+    /* Acceleration 3-dim */
+    dim = saul_reg_read(sensor_accel_t, &output);
+    if (dim > 0) {
+        m->acc_x = output.val[0]; m->acc_y = output.val[1]; m->acc_z = output.val[2];
+        // printf("\nDev: %s\tType: %s\n", sensor_accel_t->name,
+        //         saul_class_to_str(sensor_accel_t->driver->type));
+        //phydat_dump(&output, dim);
+    } else {
+        printf("[ERROR] Failed to read Acceleration\n");
+    }
+
+    /* Radient temperature 1-dim */
+    dim = saul_reg_read(sensor_radtemp_t, &output); /* 500ms */
+    if (dim > 0) {
+        m->temp = output.val[0];
+        m->radtemp = output.val[1];
+        // printf("\nDev: %s\tType: %s\n", sensor_radtemp_t->name,
+        //         saul_class_to_str(sensor_radtemp_t->driver->type));
+        //phydat_dump(&output, dim);
+    } else {
+        DEBUG("[ERROR] Failed to read Radient Temperature\n");
+    }
+
+    /* Temperature 1-dim */
+    dim = saul_reg_read(sensor_temp_t, &output); /* 15ms */
+    if (dim > 0) {
+        m->temp = output.val[0];
+        // printf("\nDev: %s\tType: %s\n", sensor_temp_t->name,
+        //         saul_class_to_str(sensor_temp_t->driver->type));
+        //phydat_dump(&output, dim);
+    } else {
+        DEBUG("[ERROR] Failed to read Temperature\n");
+    }
+
+    /* Humidity 1-dim */
+    LED_ON;
+    dim = saul_reg_read(sensor_hum_t, &output); /* 15ms */
+    if (dim > 0) {
+        m->hum = output.val[0];
+        // printf("\nDev: %s\tType: %s\n", sensor_hum_t->name,
+        //         saul_class_to_str(sensor_hum_t->driver->type));
+        //phydat_dump(&output, dim);
+    } else {
+        DEBUG("[ERROR] Failed to read Humidity\n");
+    }
+    LED_OFF;
+
+    /* Time from start */
+    m->uptime = xtimer_usec_from_ticks64(xtimer_now64());
+
+    /* Others */
+    m->serial = *fb_device_id;
+    m->type   = TYPE_FIELD;
+    m->flags  = PROVIDED_FLAGS;
+
+    //puts("\n##########################");
 }
 
 uint32_t interval_with_jitter(void)
 {
     int32_t t = SAMPLE_INTERVAL;
     t += rand() % SAMPLE_JITTER;
-    t -= SAMPLE_JITTER / 2;
+    t -= (SAMPLE_JITTER >> 1);
     return (uint32_t)t;
 }
 
@@ -308,46 +277,55 @@ uint8_t iv [16];
 #include "crypto/modes/cbc.h"
 cipher_t aesc;
 
-void crypto_init(void){
-  //While this appears absurd, don't worry too much about it.
-  //The first block is guaranteed to be unique so we don't really
-  //need the IV
-  for (int i = 0; i < 16; i++) {
-    iv[i] = i;
-  }
-  //printf("us: %d\n", *fb_device_id);
-  //printf("key: ");
-  //for (int i = 0; i < 16; i++) {
-  //  printf("%02x", fb_aes128_key[i]);
-  //}
-  //printf("\n");
-  int rv = cipher_init(&aesc, CIPHER_AES_128, fb_aes128_key, 16);
-  if (rv != CIPHER_INIT_SUCCESS) {
-    printf("failed to init cipher\n");
-    critical_error();
-  }
+void crypto_init(void) {
+	//While this appears absurd, don't worry too much about it.
+	//The first block is guaranteed to be unique so we don't really
+	//need the IV
+	for (int i = 0; i < 16; i++) {
+		iv[i] = i;
+	}
+	int rv = cipher_init(&aesc, CIPHER_AES_128, fb_aes128_key, 16);
+	if (rv != CIPHER_INIT_SUCCESS) {
+		DEBUG("[ERROR] Failed to init Cipher\n");
+		critical_error();
+	}
 }
 void aes_populate(void) {
-  cipher_encrypt_cbc(&aesc, iv, ((uint8_t*)&frontbuf) + AES_SKIP_START_BYTES, sizeof(ham7c_t)-AES_SKIP_START_BYTES, &obuffer[AES_SKIP_START_BYTES]);
-  memcpy(obuffer, ((uint8_t*)&frontbuf), AES_SKIP_START_BYTES);
+	cipher_encrypt_cbc(&aesc, iv, ((uint8_t*)&frontbuf) + AES_SKIP_START_BYTES,
+					 sizeof(ham7c_t)-AES_SKIP_START_BYTES, &obuffer[AES_SKIP_START_BYTES]);
+	memcpy(obuffer, ((uint8_t*)&frontbuf), AES_SKIP_START_BYTES);
 }
-int main(void)
-{
-    dutycycling_init();
+
+
+int main(void) {
     //This value is good randomness and unique per mote
     srand(*((uint32_t*)fb_aes128_key));
     crypto_init();
-    low_power_init();
+    sensor_config();
+
+    /* Enable dma */
+#if DMAC_ENABLE
+    dmac_init();
+    adc_set_dma_channel(DMAC_CHANNEL_ADC);
+    i2c_set_dma_channel(I2C_0,DMAC_CHANNEL_I2C);
+    spi_set_dma_channel(0,DMAC_CHANNEL_SPI_TX,DMAC_CHANNEL_SPI_RX);
+#endif
+	  LED_OFF;
 
     while (1) {
-      //Sample
-      sample(&frontbuf);
-      aes_populate();
-      //Send
-      send_udp("ff02::1",4747,obuffer,sizeof(obuffer));
-
-      //Sleep
-      xtimer_usleep(interval_with_jitter());
+		//Sample
+	    sample(&frontbuf);
+#if CLOCK_USE_ADAPTIVE
+        sysclk_change(true);
+#endif
+		aes_populate();
+		//Send
+		send_udp("ff02::1",4747,obuffer,sizeof(obuffer));
+#if CLOCK_USE_ADAPTIVE
+        sysclk_change(false);
+#endif
+		//Sleep
+		xtimer_usleep(interval_with_jitter());
     }
 
     return 0;

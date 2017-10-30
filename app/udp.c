@@ -18,6 +18,7 @@
  * @}
  */
 
+#if MODULE_GNRC_UDP
 #include <stdio.h>
 #include <inttypes.h>
 
@@ -67,3 +68,4 @@ void send_udp(char *addr_str, uint16_t port, uint8_t *data, uint16_t datalen)
           return;
       }
 }
+#endif
